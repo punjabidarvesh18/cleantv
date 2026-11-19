@@ -12,9 +12,16 @@ jobs:
         with: {distribution: temurin, java-version: '17'}
       - uses: android-actions/setup-android@v3
         with: {packages: 'platforms;android-34 build-tools;34.0.0'}
+      - name: Clock font (Poppins ExtraLight, OFL)
+        run: |
+          mkdir -p launcher/app/src/main/res/font
+          curl -fsSL -o launcher/app/src/main/res/font/clock_font.ttf https://raw.githubusercontent.com/google/fonts/main/ofl/poppins/Poppins-ExtraLight.ttf || echo "font download failed, using system font"
+          ls -la launcher/app/src/main/res/font
       - name: Big centred clock (Apple TV style)
         run: |
           python3 - <<'EOF'
+          import os
+          font = '@font/clock_font' if os.path.exists('launcher/app/src/main/res/font/clock_font.ttf') else 'sans-serif-light'
           p = 'launcher/app/src/main/res/layout/activity_main.xml'
           s = open(p, encoding='utf-8').read()
           if 'bigClockBox' not in s:
@@ -27,7 +34,7 @@ jobs:
                   android:layout_width="wrap_content"
                   android:layout_height="wrap_content"
                   android:layout_gravity="center_horizontal|top"
-                  android:layout_marginTop="88dp"
+                  android:layout_marginTop="56dp"
                   android:orientation="vertical"
                   android:gravity="center_horizontal"
                   android:focusable="false"
@@ -37,8 +44,8 @@ jobs:
                       android:layout_height="wrap_content"
                       android:format12Hour="EEEE d MMMM"
                       android:format24Hour="EEEE d MMMM"
-                      android:textColor="#F2FFFFFF"
-                      android:textSize="20sp"
+                      android:textColor="#CCFFFFFF"
+                      android:textSize="22sp"
                       android:fontFamily="@string/font_medium"
                       android:shadowColor="#99000000"
                       android:shadowRadius="12" />
@@ -47,19 +54,297 @@ jobs:
                       android:layout_height="wrap_content"
                       android:format12Hour="h:mm"
                       android:format24Hour="HH:mm"
-                      android:textColor="#FFFFFFFF"
-                      android:textSize="118sp"
-                      android:fontFamily="@string/font_light"
-                      android:letterSpacing="-0.03"
-                      android:fontFeatureSettings="tnum"
+                      android:textColor="#B3FFFFFF"
+                      android:textSize="170sp"
+                      android:fontFamily="FONTPH"
+                      android:letterSpacing="-0.02"
                       android:includeFontPadding="false"
                       android:shadowColor="#80000000"
                       android:shadowRadius="24" />
               </LinearLayout>'''
-              s = s[:j] + block + s[j:]
+              s = s[:j] + block.replace('FONTPH', font) + s[j:]
               s = s.replace('android:id="@+id/leftBlock"', 'android:id="@+id/leftBlock"\n                android:alpha="0"', 1)
               open(p, 'w', encoding='utf-8').write(s)
               print('big clock added')
+          d = 'launcher/app/src/main/res/layout/dream_clock.xml'
+          t = open(d, encoding='utf-8').read()
+          t = t.replace('android:textColor="#E6FFFFFF"', 'android:textColor="#B3FFFFFF"', 1)
+          t = t.replace('android:textSize="120sp"', 'android:textSize="170sp"', 1)
+          t = t.replace('android:fontFamily="@string/font_extralight"', 'android:fontFamily="' + font + '"', 1)
+          open(d, 'w', encoding='utf-8').write(t)
+          print('screensaver clock restyled with', font)
+          EOF
+      - name: Now playing card (Spotify)
+        run: |
+          J=launcher/app/src/main/java/com/gathin/tvhome
+          cat > $J/NowPlayingView.java <<'JAVA'
+          package com.gathin.tvhome;
+
+          import android.content.ComponentName;
+          import android.content.Context;
+          import android.content.pm.PackageManager;
+          import android.content.res.ColorStateList;
+          import android.graphics.Bitmap;
+          import android.graphics.Color;
+          import android.graphics.Typeface;
+          import android.graphics.drawable.GradientDrawable;
+          import android.media.MediaMetadata;
+          import android.media.session.MediaController;
+          import android.media.session.MediaSessionManager;
+          import android.media.session.PlaybackState;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.os.SystemClock;
+          import android.text.TextUtils;
+          import android.util.AttributeSet;
+          import android.util.TypedValue;
+          import android.view.Gravity;
+          import android.widget.ImageView;
+          import android.widget.LinearLayout;
+          import android.widget.ProgressBar;
+          import android.widget.TextView;
+          import java.util.List;
+
+          /** Apple TV style "Now playing" card for Spotify (or any app with a media session). Display only. */
+          public class NowPlayingView extends LinearLayout {
+              private final ImageView art;
+              private final TextView source;
+              private final TextView title;
+              private final TextView artist;
+              private final ProgressBar bar;
+              private final Handler handler = new Handler(Looper.getMainLooper());
+              private MediaSessionManager msm;
+              private MediaController controller;
+
+              private final MediaSessionManager.OnActiveSessionsChangedListener sessionsListener =
+                      new MediaSessionManager.OnActiveSessionsChangedListener() {
+                          @Override public void onActiveSessionsChanged(List<MediaController> list) { pick(list); }
+                      };
+
+              private final MediaController.Callback callback = new MediaController.Callback() {
+                  @Override public void onPlaybackStateChanged(PlaybackState state) { refresh(); }
+                  @Override public void onMetadataChanged(MediaMetadata metadata) { refresh(); }
+                  @Override public void onSessionDestroyed() { pick(null); }
+              };
+
+              private final Runnable tick = new Runnable() {
+                  @Override public void run() {
+                      updateProgress();
+                      handler.postDelayed(this, 1000);
+                  }
+              };
+
+              public NowPlayingView(Context context, AttributeSet attrs) {
+                  super(context, attrs);
+                  setOrientation(HORIZONTAL);
+                  setGravity(Gravity.CENTER_VERTICAL);
+                  setPadding(dp(12), dp(12), dp(18), dp(12));
+                  GradientDrawable bg = new GradientDrawable();
+                  bg.setColor(0x9914161C);
+                  bg.setCornerRadius(dp(18));
+                  bg.setStroke(Math.max(1, dp(1) / 2), 0x33FFFFFF);
+                  setBackground(bg);
+                  setFocusable(false);
+                  setVisibility(GONE);
+
+                  art = new ImageView(context);
+                  art.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                  GradientDrawable artBg = new GradientDrawable();
+                  artBg.setColor(0xFF1DB954);
+                  artBg.setCornerRadius(dp(10));
+                  art.setBackground(artBg);
+                  art.setClipToOutline(true);
+                  addView(art, new LayoutParams(dp(64), dp(64)));
+
+                  LinearLayout col = new LinearLayout(context);
+                  col.setOrientation(VERTICAL);
+                  LayoutParams colLp = new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f);
+                  colLp.leftMargin = dp(14);
+                  addView(col, colLp);
+
+                  source = text(context, 11, 0xB3FFFFFF, true);
+                  title = text(context, 17, 0xFFFFFFFF, true);
+                  artist = text(context, 13, 0xB3FFFFFF, false);
+                  col.addView(source);
+                  col.addView(title);
+                  col.addView(artist);
+
+                  bar = new ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal);
+                  bar.setMax(1000);
+                  bar.setProgressTintList(ColorStateList.valueOf(Color.WHITE));
+                  bar.setProgressBackgroundTintList(ColorStateList.valueOf(0x40FFFFFF));
+                  LayoutParams barLp = new LayoutParams(LayoutParams.MATCH_PARENT, dp(4));
+                  barLp.topMargin = dp(8);
+                  col.addView(bar, barLp);
+              }
+
+              private TextView text(Context c, int sp, int color, boolean bold) {
+                  TextView t = new TextView(c);
+                  t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
+                  t.setTextColor(color);
+                  t.setSingleLine(true);
+                  t.setEllipsize(TextUtils.TruncateAt.END);
+                  t.setTypeface(Typeface.create(Typeface.DEFAULT, bold ? Typeface.BOLD : Typeface.NORMAL));
+                  return t;
+              }
+
+              private int dp(int v) {
+                  return Math.round(v * getResources().getDisplayMetrics().density);
+              }
+
+              private ComponentName listener() {
+                  return new ComponentName(getContext(), NowPlayingListener.class);
+              }
+
+              @Override protected void onAttachedToWindow() {
+                  super.onAttachedToWindow();
+                  try {
+                      msm = (MediaSessionManager) getContext().getSystemService(Context.MEDIA_SESSION_SERVICE);
+                      if (msm != null) {
+                          msm.addOnActiveSessionsChangedListener(sessionsListener, listener(), handler);
+                          pick(msm.getActiveSessions(listener()));
+                      }
+                  } catch (SecurityException e) {
+                      msm = null;
+                      setVisibility(GONE);
+                  }
+                  handler.removeCallbacks(tick);
+                  handler.post(tick);
+              }
+
+              @Override protected void onDetachedFromWindow() {
+                  handler.removeCallbacks(tick);
+                  if (msm != null) {
+                      try { msm.removeOnActiveSessionsChangedListener(sessionsListener); } catch (RuntimeException ignored) { }
+                  }
+                  if (controller != null) controller.unregisterCallback(callback);
+                  controller = null;
+                  super.onDetachedFromWindow();
+              }
+
+              private static boolean isPlaying(MediaController mc) {
+                  PlaybackState s = mc == null ? null : mc.getPlaybackState();
+                  return s != null && s.getState() == PlaybackState.STATE_PLAYING;
+              }
+
+              private static boolean isSpotify(MediaController mc) {
+                  return mc != null && mc.getPackageName() != null && mc.getPackageName().startsWith("com.spotify");
+              }
+
+              private void pick(List<MediaController> list) {
+                  if (list == null && msm != null) {
+                      try { list = msm.getActiveSessions(listener()); } catch (SecurityException e) { list = null; }
+                  }
+                  MediaController best = null;
+                  if (list != null) {
+                      for (MediaController mc : list) {
+                          if (best == null
+                                  || (isPlaying(mc) && !isPlaying(best))
+                                  || (isPlaying(mc) == isPlaying(best) && isSpotify(mc) && !isSpotify(best))) {
+                              best = mc;
+                          }
+                      }
+                  }
+                  if (controller != null) controller.unregisterCallback(callback);
+                  controller = best;
+                  if (controller != null) controller.registerCallback(callback, handler);
+                  refresh();
+              }
+
+              private void refresh() {
+                  MediaController mc = controller;
+                  MediaMetadata m = mc == null ? null : mc.getMetadata();
+                  PlaybackState s = mc == null ? null : mc.getPlaybackState();
+                  boolean active = s != null && (s.getState() == PlaybackState.STATE_PLAYING
+                          || s.getState() == PlaybackState.STATE_PAUSED
+                          || s.getState() == PlaybackState.STATE_BUFFERING);
+                  CharSequence t = m == null ? null : m.getText(MediaMetadata.METADATA_KEY_TITLE);
+                  if (!active || TextUtils.isEmpty(t)) {
+                      setVisibility(GONE);
+                      return;
+                  }
+                  CharSequence a = m.getText(MediaMetadata.METADATA_KEY_ARTIST);
+                  if (TextUtils.isEmpty(a)) a = m.getText(MediaMetadata.METADATA_KEY_ALBUM_ARTIST);
+                  if (TextUtils.isEmpty(a)) a = m.getText(MediaMetadata.METADATA_KEY_ALBUM);
+                  Bitmap b = m.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART);
+                  if (b == null) b = m.getBitmap(MediaMetadata.METADATA_KEY_ART);
+                  if (b == null) b = m.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON);
+                  String app = mc.getPackageName();
+                  try {
+                      PackageManager pm = getContext().getPackageManager();
+                      app = pm.getApplicationLabel(pm.getApplicationInfo(mc.getPackageName(), 0)).toString();
+                  } catch (PackageManager.NameNotFoundException ignored) { }
+                  boolean playing = s.getState() == PlaybackState.STATE_PLAYING;
+                  source.setText((app + (playing ? "  •  NOW PLAYING" : "  •  PAUSED")).toUpperCase());
+                  title.setText(t);
+                  artist.setText(a == null ? "" : a);
+                  artist.setVisibility(TextUtils.isEmpty(a) ? GONE : VISIBLE);
+                  art.setImageBitmap(b);
+                  setVisibility(VISIBLE);
+                  updateProgress();
+              }
+
+              private void updateProgress() {
+                  MediaController mc = controller;
+                  if (mc == null || getVisibility() != VISIBLE) return;
+                  MediaMetadata m = mc.getMetadata();
+                  PlaybackState s = mc.getPlaybackState();
+                  long duration = m == null ? 0 : m.getLong(MediaMetadata.METADATA_KEY_DURATION);
+                  if (s == null || duration <= 0) {
+                      bar.setVisibility(GONE);
+                      return;
+                  }
+                  long pos = s.getPosition();
+                  if (s.getState() == PlaybackState.STATE_PLAYING && s.getLastPositionUpdateTime() > 0) {
+                      pos += (long) ((SystemClock.elapsedRealtime() - s.getLastPositionUpdateTime()) * s.getPlaybackSpeed());
+                  }
+                  pos = Math.max(0, Math.min(pos, duration));
+                  bar.setVisibility(VISIBLE);
+                  bar.setProgress((int) (pos * 1000 / duration));
+              }
+          }
+          JAVA
+          cat > $J/NowPlayingListener.java <<'JAVA'
+          package com.gathin.tvhome;
+
+          import android.service.notification.NotificationListenerService;
+
+          /** Exists only so the launcher may read media sessions (granted once over adb). */
+          public class NowPlayingListener extends NotificationListenerService { }
+          JAVA
+          python3 - <<'EOF'
+          m = 'launcher/app/src/main/AndroidManifest.xml'
+          s = open(m, encoding='utf-8').read()
+          if 'NowPlayingListener' not in s:
+              svc = '''        <service
+                      android:name=".NowPlayingListener"
+                      android:exported="true"
+                      android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+                      <intent-filter>
+                          <action android:name="android.service.notification.NotificationListenerService" />
+                      </intent-filter>
+                  </service>
+              '''
+              i = s.rindex('</application>')
+              s = s[:i] + svc + s[i:]
+              open(m, 'w', encoding='utf-8').write(s)
+          p = 'launcher/app/src/main/res/layout/activity_main.xml'
+          s = open(p, encoding='utf-8').read()
+          if 'nowPlaying' not in s:
+              i = s.index('android:id="@+id/bigClockBox"')
+              j = s.index('</LinearLayout>', i) + len('</LinearLayout>')
+              card = '''
+
+              <com.gathin.tvhome.NowPlayingView
+                  android:id="@+id/nowPlaying"
+                  android:layout_width="420dp"
+                  android:layout_height="wrap_content"
+                  android:layout_gravity="bottom|start"
+                  android:layout_marginStart="64dp"
+                  android:layout_marginBottom="150dp" />'''
+              s = s[:j] + card + s[j:]
+              open(p, 'w', encoding='utf-8').write(s)
+          print('now playing card added')
           EOF
       - name: Build
         working-directory: launcher
