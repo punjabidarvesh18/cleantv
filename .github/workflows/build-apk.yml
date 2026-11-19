@@ -12,6 +12,55 @@ jobs:
         with: {distribution: temurin, java-version: '17'}
       - uses: android-actions/setup-android@v3
         with: {packages: 'platforms;android-34 build-tools;34.0.0'}
+      - name: Big centred clock (Apple TV style)
+        run: |
+          python3 - <<'EOF'
+          p = 'launcher/app/src/main/res/layout/activity_main.xml'
+          s = open(p, encoding='utf-8').read()
+          if 'bigClockBox' not in s:
+              i = s.index('android:id="@+id/ambient"')
+              j = s.index('/>', i) + 2
+              block = '''
+
+              <LinearLayout
+                  android:id="@+id/bigClockBox"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:layout_gravity="center_horizontal|top"
+                  android:layout_marginTop="88dp"
+                  android:orientation="vertical"
+                  android:gravity="center_horizontal"
+                  android:focusable="false"
+                  android:importantForAccessibility="no">
+                  <TextClock
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:format12Hour="EEEE d MMMM"
+                      android:format24Hour="EEEE d MMMM"
+                      android:textColor="#F2FFFFFF"
+                      android:textSize="20sp"
+                      android:fontFamily="@string/font_medium"
+                      android:shadowColor="#99000000"
+                      android:shadowRadius="12" />
+                  <TextClock
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:format12Hour="h:mm"
+                      android:format24Hour="HH:mm"
+                      android:textColor="#FFFFFFFF"
+                      android:textSize="118sp"
+                      android:fontFamily="@string/font_light"
+                      android:letterSpacing="-0.03"
+                      android:fontFeatureSettings="tnum"
+                      android:includeFontPadding="false"
+                      android:shadowColor="#80000000"
+                      android:shadowRadius="24" />
+              </LinearLayout>'''
+              s = s[:j] + block + s[j:]
+              s = s.replace('android:id="@+id/leftBlock"', 'android:id="@+id/leftBlock"\n                android:alpha="0"', 1)
+              open(p, 'w', encoding='utf-8').write(s)
+              print('big clock added')
+          EOF
       - name: Build
         working-directory: launcher
         run: chmod +x gradlew && ./gradlew --no-daemon assembleRelease
