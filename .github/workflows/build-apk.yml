@@ -2,7 +2,7 @@ name: Build launcher APK
 on:
   workflow_dispatch:
   push:
-    paths: ['.github/workflows/build-apk.yml']
+    paths: ['.github/workflows/**']
 jobs:
   apk:
     runs-on: ubuntu-latest
@@ -17,62 +17,28 @@ jobs:
           mkdir -p launcher/app/src/main/res/font
           curl -fsSL -o launcher/app/src/main/res/font/clock_font.ttf https://raw.githubusercontent.com/google/fonts/main/ofl/poppins/Poppins-ExtraLight.ttf || echo "font download failed, using system font"
           ls -la launcher/app/src/main/res/font
-      - name: Big centred clock (Apple TV style)
+      - name: Small translucent clock top-left
         run: |
           python3 - <<'EOF'
           import os
-          font = '@font/clock_font' if os.path.exists('launcher/app/src/main/res/font/clock_font.ttf') else 'sans-serif-light'
+          font = '@font/clock_font' if os.path.exists('launcher/app/src/main/res/font/clock_font.ttf') else '@string/font_light'
           p = 'launcher/app/src/main/res/layout/activity_main.xml'
           s = open(p, encoding='utf-8').read()
-          if 'bigClockBox' not in s:
-              i = s.index('android:id="@+id/ambient"')
-              j = s.index('/>', i) + 2
-              block = '''
-
-              <LinearLayout
-                  android:id="@+id/bigClockBox"
-                  android:layout_width="wrap_content"
-                  android:layout_height="wrap_content"
-                  android:layout_gravity="center_horizontal|top"
-                  android:layout_marginTop="56dp"
-                  android:orientation="vertical"
-                  android:gravity="center_horizontal"
-                  android:focusable="false"
-                  android:importantForAccessibility="no">
-                  <TextClock
-                      android:layout_width="wrap_content"
-                      android:layout_height="wrap_content"
-                      android:format12Hour="EEEE d MMMM"
-                      android:format24Hour="EEEE d MMMM"
-                      android:textColor="#CCFFFFFF"
-                      android:textSize="22sp"
-                      android:fontFamily="@string/font_medium"
-                      android:shadowColor="#99000000"
-                      android:shadowRadius="12" />
-                  <TextClock
-                      android:layout_width="wrap_content"
-                      android:layout_height="wrap_content"
-                      android:format12Hour="h:mm"
-                      android:format24Hour="HH:mm"
-                      android:textColor="#B3FFFFFF"
-                      android:textSize="170sp"
-                      android:fontFamily="FONTPH"
-                      android:letterSpacing="-0.02"
-                      android:includeFontPadding="false"
-                      android:shadowColor="#80000000"
-                      android:shadowRadius="24" />
-              </LinearLayout>'''
-              s = s[:j] + block.replace('FONTPH', font) + s[j:]
-              s = s.replace('android:id="@+id/leftBlock"', 'android:id="@+id/leftBlock"\n                android:alpha="0"', 1)
-              open(p, 'w', encoding='utf-8').write(s)
-              print('big clock added')
+          if 'android:alpha="0.5"' not in s:
+              s = s.replace('android:id="@+id/leftBlock"', 'android:id="@+id/leftBlock"\n                android:alpha="0.5"', 1)
+          i = s.index('android:id="@+id/clock"')
+          j = s.index('android:fontFamily="@string/font_light"', i)
+          k = s.index('/>', i)
+          if j < k:
+              s = s[:j] + 'android:fontFamily="' + font + '"' + s[j + len('android:fontFamily="@string/font_light"'):]
+          open(p, 'w', encoding='utf-8').write(s)
+          print('header clock: translucent, font', font)
           d = 'launcher/app/src/main/res/layout/dream_clock.xml'
           t = open(d, encoding='utf-8').read()
-          t = t.replace('android:textColor="#E6FFFFFF"', 'android:textColor="#B3FFFFFF"', 1)
-          t = t.replace('android:textSize="120sp"', 'android:textSize="170sp"', 1)
+          t = t.replace('android:textColor="#E6FFFFFF"', 'android:textColor="#99FFFFFF"', 1)
           t = t.replace('android:fontFamily="@string/font_extralight"', 'android:fontFamily="' + font + '"', 1)
           open(d, 'w', encoding='utf-8').write(t)
-          print('screensaver clock restyled with', font)
+          print('screensaver clock restyled')
           EOF
       - name: Now playing card (Spotify)
         run: |
@@ -105,7 +71,7 @@ jobs:
           import android.widget.TextView;
           import java.util.List;
 
-          /** Apple TV style "Now playing" card for Spotify (or any app with a media session). Display only. */
+          /** Apple TV style "Now playing" card, shown only while Spotify is playing. Display only. */
           public class NowPlayingView extends LinearLayout {
               private final ImageView art;
               private final TextView source;
@@ -238,6 +204,7 @@ jobs:
                   MediaController best = null;
                   if (list != null) {
                       for (MediaController mc : list) {
+                          if (!isSpotify(mc)) continue;
                           if (best == null
                                   || (isPlaying(mc) && !isPlaying(best))
                                   || (isPlaying(mc) == isPlaying(best) && isSpotify(mc) && !isSpotify(best))) {
@@ -255,8 +222,7 @@ jobs:
                   MediaController mc = controller;
                   MediaMetadata m = mc == null ? null : mc.getMetadata();
                   PlaybackState s = mc == null ? null : mc.getPlaybackState();
-                  boolean active = s != null && (s.getState() == PlaybackState.STATE_PLAYING
-                          || s.getState() == PlaybackState.STATE_PAUSED
+                  boolean active = isSpotify(mc) && s != null && (s.getState() == PlaybackState.STATE_PLAYING
                           || s.getState() == PlaybackState.STATE_BUFFERING);
                   CharSequence t = m == null ? null : m.getText(MediaMetadata.METADATA_KEY_TITLE);
                   if (!active || TextUtils.isEmpty(t)) {
@@ -331,8 +297,8 @@ jobs:
           p = 'launcher/app/src/main/res/layout/activity_main.xml'
           s = open(p, encoding='utf-8').read()
           if 'nowPlaying' not in s:
-              i = s.index('android:id="@+id/bigClockBox"')
-              j = s.index('</LinearLayout>', i) + len('</LinearLayout>')
+              i = s.index('android:id="@+id/ambient"')
+              j = s.index('/>', i) + 2
               card = '''
 
               <com.gathin.tvhome.NowPlayingView
